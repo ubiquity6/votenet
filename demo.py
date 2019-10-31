@@ -12,10 +12,13 @@ import numpy as np
 import argparse
 import importlib
 import time
+import json
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default='sunrgbd', help='Dataset: sunrgbd or scannet [default: sunrgbd]')
-parser.add_argument('--num_point', type=int, default=20000, help='Point Number [default: 20000]')
+parser.add_argument('--num_point', type=int, default=None, help='Point Number [default: 20000]')
+parser.add_argument('--input_pc_path', type=str, help='Point cloud to run prediction on')
+parser.add_argument('--output_dir', type=str, help='Directory to dump outputs to')
 FLAGS = parser.parse_args()
 
 import torch
@@ -35,7 +38,9 @@ def preprocess_point_cloud(point_cloud):
     floor_height = np.percentile(point_cloud[:,2],0.99)
     height = point_cloud[:,2] - floor_height
     point_cloud = np.concatenate([point_cloud, np.expand_dims(height, 1)],1) # (N,4) or (N,7)
-    point_cloud = random_sampling(point_cloud, FLAGS.num_point)
+    # Turning off random sampling for the sake of reproducibility
+    if FLAGS.num_point is not None: 
+        point_cloud = random_sampling(point_cloud, FLAGS.num_point)
     pc = np.expand_dims(point_cloud.astype(np.float32), 0) # (1,40000,4)
     return pc
 
@@ -47,12 +52,18 @@ if __name__=='__main__':
         sys.path.append(os.path.join(ROOT_DIR, 'sunrgbd'))
         from sunrgbd_detection_dataset import DC # dataset config
         checkpoint_path = os.path.join(demo_dir, 'pretrained_votenet_on_sunrgbd.tar')
-        pc_path = os.path.join(demo_dir, 'input_pc_sunrgbd.ply')
+        if FLAGS.input_pc_path is not None:
+            pc_path = FLAGS.input_pc_path
+        else:
+            pc_path = os.path.join(demo_dir, 'input_pc_sunrgbd.ply')
     elif FLAGS.dataset == 'scannet':
         sys.path.append(os.path.join(ROOT_DIR, 'scannet'))
         from scannet_detection_dataset import DC # dataset config
         checkpoint_path = os.path.join(demo_dir, 'pretrained_votenet_on_scannet.tar')
-        pc_path = os.path.join(demo_dir, 'input_pc_scannet.ply')
+        if FLAGS.input_pc_path is not None:
+            pc_path = FLAGS.input_pc_path
+        else:
+            pc_path = os.path.join(demo_dir, 'input_pc_scannet.ply')
     else:
         print('Unkown dataset %s. Exiting.'%(DATASET))
         exit(-1)
@@ -95,8 +106,14 @@ if __name__=='__main__':
     end_points['point_clouds'] = inputs['point_clouds']
     pred_map_cls = parse_predictions(end_points, eval_config_dict)
     print('Finished detection. %d object detected.'%(len(pred_map_cls[0])))
-  
-    dump_dir = os.path.join(demo_dir, '%s_results'%(FLAGS.dataset))
+    if FLAGS.output_dir is not None:
+        dump_dir = FLAGS.output_dir
+    else:
+        if FLAGS.input_pc_path is not None:
+            base_dir = os.path.dirname(FLAGS.input_pc_path)
+            dump_dir = os.path.join(base_dir, 'inference_output')
+        else:
+            dump_dir = os.path.join(demo_dir, '%s_results'%(FLAGS.dataset))
     if not os.path.exists(dump_dir): os.mkdir(dump_dir) 
     MODEL.dump_results(end_points, dump_dir, DC, True)
     print('Dumped detection results to folder %s'%(dump_dir))

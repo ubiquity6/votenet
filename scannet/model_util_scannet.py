@@ -61,6 +61,7 @@ class ScannetDatasetConfig(object):
     def param2obb(self, center, heading_class, heading_residual, size_class, size_residual):
         heading_angle = self.class2angle(heading_class, heading_residual)
         box_size = self.class2size(int(size_class), size_residual)
+        print('Size class {}'.format(size_class))
         obb = np.zeros((7,))
         obb[0:3] = center
         obb[3:6] = box_size

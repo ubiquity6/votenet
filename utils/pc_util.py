@@ -10,6 +10,7 @@ Author: Charles R. Qi and Or Litany
 
 import os
 import sys
+from matplotlib import cm
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
 
@@ -23,6 +24,8 @@ except:
     sys.exit(-1)
 
 
+
+cmap = cm.get_cmap('tab20', 18)
 # Mesh IO
 import trimesh
 
@@ -194,7 +197,12 @@ def read_ply(filename):
     """ read XYZ point cloud from filename PLY file """
     plydata = PlyData.read(filename)
     pc = plydata['vertex'].data
-    pc_array = np.array([[x, y, z] for x,y,z in pc])
+    if len(pc[0]) == 6:
+        pc_array = np.array([[x, y, z] for x,y,z, red, green,blue in pc]) # load with rgb
+    elif len(pc[0]) == 3:
+        pc_array = np.array([[x, y, z] for x,y,z, in pc])
+    else:
+        raise NotImplementedError('Unable to read ply with vertices of length {}'.format(len(pc[0])))
     return pc_array
 
 
@@ -379,8 +387,13 @@ def write_bbox(scene_bbox, out_filename):
     scene = trimesh.scene.Scene()
     for box in scene_bbox:
         scene.add_geometry(convert_box_to_trimesh_fmt(box))        
-    
-    mesh_list = trimesh.util.concatenate(scene.dump())
+    scene_dump = scene.dump()
+    print('Length of scene dump {}'.format(len(scene_dump)))
+    try:
+        mesh_list = trimesh.util.concatenate(scene_dump)
+    except Exception as e:
+        print('Failed to concatenate mesh list with error {}'.format(e))
+        mesh_list = scene_dump
     # save to ply file    
     trimesh.io.export.export_mesh(mesh_list, out_filename, file_type='ply')
     
@@ -412,13 +425,17 @@ def write_oriented_bbox(scene_bbox, out_filename):
         trns[3,3] = 1.0            
         trns[0:3,0:3] = heading2rotmat(box[6])
         box_trimesh_fmt = trimesh.creation.box(lengths, trns)
+        
         return box_trimesh_fmt
 
     scene = trimesh.scene.Scene()
+    scene_list = []
     for box in scene_bbox:
-        scene.add_geometry(convert_oriented_box_to_trimesh_fmt(box))        
+        geom = convert_oriented_box_to_trimesh_fmt(box)
+        scene.add_geometry(geom)
+        scene_list.append(geom)        
     
-    mesh_list = trimesh.util.concatenate(scene.dump())
+    mesh_list = trimesh.util.concatenate(scene_list)
     # save to ply file    
     trimesh.io.export.export_mesh(mesh_list, out_filename, file_type='ply')
     
@@ -472,6 +489,7 @@ def write_lines_as_cylinders(pcl, filename, rad=0.005, res=64):
         res: number of sections used to create the cylinder
     """
     scene = trimesh.scene.Scene()
+    scene_list = []
     for src,tgt in pcl:
         # compute line
         vec = tgt - src
@@ -480,8 +498,11 @@ def write_lines_as_cylinders(pcl, filename, rad=0.005, res=64):
         M[:3,3] = 0.5*src + 0.5*tgt
         height = np.sqrt(np.dot(vec, vec))
         scene.add_geometry(trimesh.creation.cylinder(radius=rad, height=height, sections=res, transform=M))
-    mesh_list = trimesh.util.concatenate(scene.dump())
-    trimesh.io.export.export_mesh(mesh_list, '%s.ply'%(filename), file_type='ply')
+        scene_list.append(trimesh.creation.cylinder(radius=rad, height=height, sections=res, transform=M))
+    mesh_list = trimesh.util.concatenate(scene_list)
+    file_name = '%s.ply'%(filename)
+    trimesh.io.export.export_mesh(mesh_list, file_name, file_type='ply')
+    print('Exported mesh to {}'.format(file_name))
 
 # ----------------------------------------
 # Testing
@@ -494,9 +515,7 @@ if __name__ == '__main__':
     ############
     pcl = np.random.rand(32, 2, 3)
     write_lines_as_cylinders(pcl, 'point_connectors')
-    input()
-    
-   
+       
     scene_bbox = np.zeros((1,7))
     scene_bbox[0,3:6] = np.array([1,2,3]) # dx,dy,dz
     scene_bbox[0,6] = np.pi/4 # 45 degrees 

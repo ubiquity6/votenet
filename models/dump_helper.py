@@ -7,12 +7,13 @@ import numpy as np
 import torch
 import os
 import sys
+import json
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 import pc_util
 
-DUMP_CONF_THRESH = 0.5 # Dump boxes with obj prob larger than that.
+DUMP_CONF_THRESH = 0.6 # Dump boxes with obj prob larger than that.
 
 def softmax(x):
     ''' Numpy function for softmax'''
@@ -33,6 +34,7 @@ def dump_results(end_points, dump_dir, config, inference_switch=False):
     '''
     if not os.path.exists(dump_dir):
         os.system('mkdir %s'%(dump_dir))
+    print('Dumping results')
 
     # INPUT
     point_clouds = end_points['point_clouds'].cpu().numpy()
@@ -76,17 +78,41 @@ def dump_results(end_points, dump_dir, config, inference_switch=False):
         # Dump predicted bounding boxes
         if np.sum(objectness_prob>DUMP_CONF_THRESH)>0:
             num_proposal = pred_center.shape[1]
-            obbs = []
+            obbs = [] # list of object bounding boxes
+            class_labels = []
             for j in range(num_proposal):
                 obb = config.param2obb(pred_center[i,j,0:3], pred_heading_class[i,j], pred_heading_residual[i,j],
                                 pred_size_class[i,j], pred_size_residual[i,j])
                 obbs.append(obb)
+
             if len(obbs)>0:
                 obbs = np.vstack(tuple(obbs)) # (num_proposal, 7)
                 pc_util.write_oriented_bbox(obbs[objectness_prob>DUMP_CONF_THRESH,:], os.path.join(dump_dir, '%06d_pred_confident_bbox.ply'%(idx_beg+i)))
                 pc_util.write_oriented_bbox(obbs[np.logical_and(objectness_prob>DUMP_CONF_THRESH, pred_mask[i,:]==1),:], os.path.join(dump_dir, '%06d_pred_confident_nms_bbox.ply'%(idx_beg+i)))
                 pc_util.write_oriented_bbox(obbs[pred_mask[i,:]==1,:], os.path.join(dump_dir, '%06d_pred_nms_bbox.ply'%(idx_beg+i)))
                 pc_util.write_oriented_bbox(obbs, os.path.join(dump_dir, '%06d_pred_bbox.ply'%(idx_beg+i)))
+                confident_nms_indices = np.logical_and(objectness_prob>DUMP_CONF_THRESH, pred_mask[i,:]==1)
+                confinds = []
+                for k in range(len(confident_nms_indices)):
+                    if confident_nms_indices[k]:
+                        confinds.append(k)
+                raw_data = {}
+                raw_data['objects'] = []
+                for ind in confinds:
+                    class_index = int(pred_size_class[i,ind].detach().cpu().numpy())
+                    class_type = config.class2type[class_index]
+                    print('Detected class {}'.format(class_type))
+                    bbox = obbs[ind,:]
+                    obj = {}
+                    obj['class'] = class_type
+                    obj['box_center'] = list(obbs[ind,0:3])
+                    obj['box_size'] = list(obbs[ind,3:6])
+                    raw_data['objects'].append(obj)
+                    pc_util.write_oriented_bbox([bbox], os.path.join(dump_dir, 'object_{}_{}.ply'.format(ind,class_type)))
+                save_file = os.path.join(dump_dir, 'bounding_boxes.json')
+                with open(save_file, 'w+') as f:
+                    json.dump(raw_data, f)
+
 
     # Return if it is at inference time. No dumping of groundtruths
     if inference_switch:
